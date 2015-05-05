@@ -1,0 +1,136 @@
+---
+- hosts: localhost
+  sudo: yes
+
+  vars:
+    # use this for naming the images.
+    - user: xsteadfastx
+
+    # a temp dir for storing the dockerfile for building.
+    - temp_docker_build_dir: /tmp/docker-jenkins
+
+    # a nice mysql server root password.
+    # needed for creating mysql server container.
+    - mysql_root_password: nicepassword
+
+  tasks:
+
+    # adding the gpg key from the docker team.
+    - name: APT | add docker repo key
+      apt_key: keyserver=hkp://p80.pool.sks-keyservers.net:80
+               id=36A1D7869245C8950F966E92D8576A8BA88D21E9
+               state=present
+
+    # adding the docker repo so we can always get the freshest docker version.
+    - name: APT | add docker repo
+      apt_repository: repo="deb https://get.docker.com/ubuntu docker main"
+                      update_cache=yes
+                      state=present
+
+    # install docker.
+    - name: APT | install docker
+      apt: name=lxc-docker
+           update_cachse=yes
+           cache_valid_time=600
+           state=present
+
+    # needed for ansible to handle docker.
+    # the python-docker deb in the repos is too old.
+    # so i had to use the pypi one.
+    - name: PIP | install docker-py
+      pip: name=docker-py
+           version=1.1.0
+
+    # create temp dir for building the jenkins-data image.
+    - name: DIR | create jenkins-data docker build directory
+      file: path="{{ temp_docker_build_dir }}/jenkins-data"
+            state=directory
+
+    # copy dockerfile.
+    - name: COPY | transfer jenkins-data Dockerfile
+      copy: src=files/Dockerfile-jenkins-data
+            dest="{{ temp_docker_build_dir }}/jenkins-data/Dockerfile"
+
+    # build the docker image and name it jenkins-data.
+    - name: DOCKER | build jenkins data image
+      docker_image: path="{{ temp_docker_build_dir }}/jenkins-data"
+                    name="{{ user }}/jenkins-data"
+                    state=present
+
+    # create temp dir for building jenkins image.
+    - name: DIR | create jenkins docker build directory
+      file: path="{{ temp_docker_build_dir }}/jenkins"
+            state=directory
+
+    # copy dockerfile.
+    - name: COPY | transfer jenkins Dockerfile
+      copy: src=files/Dockerfile-jenkins
+            dest="{{ temp_docker_build_dir }}/jenkins/Dockerfile"
+
+    # build jenkins image.
+    - name: DOCKER | build jenkins image
+      docker_image: path="{{ temp_docker_build_dir }}/jenkins"
+                    name="{{ user }}/jenkins"
+                    state=present
+
+    # remove temp dir.
+    - name: RM | remove temp docker build directory
+      file: path="{{ temp_docker_build_dir }}"
+            state=absent
+
+    # start the jenkins data container named jenkins-data.
+    # this is needed that the jenkins data gets persistent.
+    # it meanst that the directory '/var/jenkins_home' gets stored persistent.
+    # later we can use this volume from the jenkins container and the data
+    # will be there. even after we run a fresh jenkins container.
+    - name: DOCKER | jenkins data volume
+      docker:
+        name: jenkins-data
+        image: "{{ user }}/jenkins-data"
+        state: present
+        volumes:
+          - /var/jenkins_home
+
+    # the same for the mysql server data.
+    - name: DOCKER | mysql data volume
+      docker:
+        name: mysql-data
+        image: busybox
+        state: present
+        volumes:
+          - /var/lib/mysql
+
+    # run the mysql server container which uses the persistent volume from
+    # mysql-data. it needs the MYSQL_ROOT_PASSWORD env to run.
+    - name: DOCKER | mysql container
+      docker:
+        name: mysql
+        image: mysql:5.5
+        state: started
+        pull: always
+        volumes_from:
+          - mysql-data
+        env:
+          MYSQL_ROOT_PASSWORD: "{{ mysql_root_password }}"
+
+    # now finally the jenkins container. it links to the mysql container
+    # because i need some mysql for some tests im running in jenkins.
+    # and with the link i can easily use the environment variables in jenkins.
+    # i bind the jenkins port only to localhost port 9090. i use nginx for
+    # proxying. in "volumes" i define my host directory in which my git repos
+    # are. so jenkins think its all in a local directory.
+    # and "/var/jenkings_home" is stored in the "jenkins-data" container.
+    # voila.
+    - name: DOCKER | jenkins container
+      docker:
+        name: jenkins
+        image: "{{ user }}/jenkins"
+        state: reloaded
+        links:
+          - "mysql:mysql"
+        ports:
+          - "127.0.0.1:9090:8080"
+        volumes:
+          - "/srv/git:/data"
+        volumes_from:
+          - jenkins-data

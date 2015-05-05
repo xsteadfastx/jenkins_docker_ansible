@@ -1,0 +1,4 @@
+FROM jenkins
+
+USER root
+RUN apt-get update && apt-get install -y python-dev python-setuptools python-virtualenv python-pip libjpeg-dev ansible mysql-client && rm -rf /var/lib/apt/lists/* && pip install tox
