@@ -30,7 +30,7 @@
     # install docker.
     - name: APT | install docker
       apt: name=lxc-docker
-           update_cachse=yes
+           update_cache=yes
            cache_valid_time=600
            state=present
 
@@ -106,7 +106,7 @@
       docker:
         name: mysql
         image: mysql:5.5
-        state: started
+        state: reloaded
         pull: always
         volumes_from:
           - mysql-data
